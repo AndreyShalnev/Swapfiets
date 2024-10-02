@@ -1,0 +1,114 @@
+trigger:
+  branches:
+    include:
+      - main
+      - release/*
+      - feature/*
+      - fix/*
+
+variables:
+  dockerRegistryServiceConnection: 'docker-hub-connection'
+  imageName: 'bikehub/bike-api'
+  tag: '$(Build.BuildId)'
+  kubernetesServiceConnection: 'k8s-dev-cluster'
+  namespace: 'dev'
+
+stages:
+  - stage: Build
+    jobs:
+      - job: BuildAndPushImage
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          # Build the Docker image
+          - task: Docker@2
+            displayName: 'Build Docker image'
+            inputs:
+              command: 'build'
+              repository: '$(imageName)'
+              Dockerfile: '**/Dockerfile'
+              tags: |
+                $(tag)
+
+          # Push the Docker image to the Docker Registry
+          - task: Docker@2
+            displayName: 'Push Docker image'
+            inputs:
+              command: 'push'
+              repository: '$(imageName)'
+              tags: |
+                $(tag)
+
+  - stage: Tests
+    dependsOn: Build
+    condition: succeeded()
+    jobs:
+      - job: RunTests
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          # Run unit tests
+          - script: |
+              dotnet test --no-build --verbosity normal
+            displayName: 'Run Unit Tests'
+
+  - stage: DeployToDev
+    dependsOn: Tests
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - job: DeployDev
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          # Install Helm
+          - task: HelmInstaller@1
+            inputs:
+              helmVersionToInstall: 'v3.5.0'
+
+          # Configure Kubernetes connection (Dev cluster)
+          - task: Kubernetes@1
+            inputs:
+              connectionType: 'Kubernetes Service Connection'
+              kubernetesServiceConnection: '$(kubernetesServiceConnection)'
+              namespace: '$(namespace)'
+              command: 'set-context'
+              arguments: ''
+
+          # Deploy using Helm to the Dev cluster
+          - script: |
+              helm upgrade --install bike-api ./helm --set image.repository=$(imageName) --set image.tag=$(tag) --namespace $(namespace)
+            displayName: 'Deploy to Dev using Helm'
+
+  - stage: ManualDeployToDev
+    dependsOn: Tests
+    condition: and(succeeded(), or(startsWith(variables['Build.SourceBranch'], 'refs/heads/feature/'), startsWith(variables['Build.SourceBranch'], 'refs/heads/fix/')))
+    jobs:
+      - job: DeployDevManual
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          # Install Helm
+          - task: HelmInstaller@1
+            inputs:
+              helmVersionToInstall: 'v3.5.0'
+
+          # Configure Kubernetes connection (Dev cluster)
+          - task: Kubernetes@1
+            inputs:
+              connectionType: 'Kubernetes Service Connection'
+              kubernetesServiceConnection: '$(kubernetesServiceConnection)'
+              namespace: '$(namespace)'
+              command: 'set-context'
+              arguments: ''
+
+          # Deploy using Helm to the Dev cluster
+          - script: |
+              helm upgrade --install bike-api ./helm --set image.repository=$(imageName) --set image.tag=$(tag) --namespace $(namespace)
+            displayName: 'Deploy to Dev using Helm'
+            # Make this step manually triggered
+            condition: succeeded()
+            timeoutInMinutes: 0
+            approval: 
+              execution:
+                approvers: 
+                  - "<your-email@company.com>" # Specify the email of the person who can manually trigger the deployment
