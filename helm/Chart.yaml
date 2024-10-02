@@ -1,0 +1,5 @@
+apiVersion: v2
+name: bike-api
+description: A Helm chart for deploying the Bike API service
+version: 0.1.0
+appVersion: "1.0.0"
